@@ -70,64 +70,10 @@
 
   closeWonderBtn?.addEventListener("click", ()=>{
     wonder?.classList.add("hidden");
-
-  // ---------- Upload: user image to the wall frame (and wonder) ----------
-  function setFrameImage(dataUrl, opts = {}){
-    const persist = opts.persist !== false;
-    const toastMsg = opts.toastMsg !== false;
-    if (!dataUrl || typeof dataUrl !== "string") return;
-
-    // Update modal image (wonder)
-    if (wonderImg){
-      wonderImg.classList.remove("hidden");
-      wonderFallback?.classList.add("hidden");
-      wonderImg.src = dataUrl;
-    }
-
-    // Update in-canvas frame art
-    const img = new Image();
-    img.onload = () => {
-      frameArt.img = img;
-      frameArt.ready = true;
-      frameArt.dataUrl = dataUrl;
-    };
-    img.onerror = () => { if (toastMsg) toast("Kunde inte läsa bilden 😵", 1800); };
-    img.src = dataUrl;
-
-    if (persist){
-      try{
-        // Avoid blowing up storage: DataURLs can be huge.
-        if (dataUrl.length <= 900000){
-          localStorage.setItem("jesper_frame_img", dataUrl);
-        } else {
-          localStorage.removeItem("jesper_frame_img");
-          toast("Bilden var för stor att spara (men visas nu).", 1800);
-        }
-      } catch(_){ /* ignore */ }
-    }
-    if (toastMsg) toast("🖼️ Tavlan uppdaterad!", 1400);
-  }
-
-  // Load persisted frame image (if any)
-  if (pendingFrameDataUrl && typeof pendingFrameDataUrl === "string" && pendingFrameDataUrl.startsWith("data:image/")){
-    setFrameImage(pendingFrameDataUrl, { persist:false, toastMsg:false });
-    pendingFrameDataUrl = null;
-  }
-
-  upload?.addEventListener("change", (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setFrameImage(String(reader.result || ""), { persist:true, toastMsg:true });
-    reader.readAsDataURL(file);
-    // allow re-uploading the same file again on iOS
-    try { e.target.value = ""; } catch(_){}
-  });
-
     bubble("Tillbaka i rummet. Som vanligt.");
   });
 
-  // ---------- Audio (WebAudio) ----------
+// ---------- Audio (WebAudio) ----------
   let audioEnabled = false;
   let audioCtx = null;
 
@@ -306,7 +252,70 @@
   } catch(_) { /* ignore */ }
 
 
-  // keep everything on floor
+  
+  // ---------- Upload: user image to the wall frame (and wonder) ----------
+  function setFrameImage(dataUrl, opts = {}){
+    const persist = opts.persist !== false;
+    const toastMsg = opts.toastMsg !== false;
+    if (!dataUrl || typeof dataUrl !== "string") return;
+
+    // Update modal image (wonder)
+    if (wonderImg){
+      wonderImg.classList.remove("hidden");
+      wonderFallback?.classList.add("hidden");
+      wonderImg.src = dataUrl;
+    }
+
+    // Update in-canvas frame art
+    const img = new Image();
+    img.onload = () => {
+      frameArt.img = img;
+      frameArt.ready = true;
+      frameArt.dataUrl = dataUrl;
+    };
+    img.onerror = () => { if (toastMsg) toast("Kunde inte läsa bilden 😵", 1800); };
+    img.src = dataUrl;
+
+    if (persist){
+      try{
+        // Avoid blowing up storage: DataURLs can be huge.
+        if (dataUrl.length <= 900000){
+          localStorage.setItem("jesper_frame_img", dataUrl);
+        } else {
+          localStorage.removeItem("jesper_frame_img");
+          if (toastMsg) toast("Bilden var för stor att spara (men visas nu).", 1800);
+        }
+      } catch(_){ /* ignore */ }
+    }
+    if (toastMsg) toast("🖼️ Tavlan uppdaterad!", 1400);
+  }
+
+  // Load persisted frame image (if any)
+  if (pendingFrameDataUrl && typeof pendingFrameDataUrl === "string" && pendingFrameDataUrl.startsWith("data:image/")){
+    setFrameImage(pendingFrameDataUrl, { persist:false, toastMsg:false });
+    pendingFrameDataUrl = null;
+  }
+
+  upload?.addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    if (file.type && !file.type.startsWith("image/")){
+      toast("Välj en bildfil 🙂", 1600);
+      try { e.target.value = ""; } catch(_){}
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => setFrameImage(String(reader.result || ""), { persist:true, toastMsg:true });
+    reader.onerror = () => toast("Kunde inte läsa filen 😵", 1800);
+    reader.readAsDataURL(file);
+
+    // allow re-uploading the same file again on iOS
+    try { e.target.value = ""; } catch(_){}
+  });
+
+// keep everything on floor
   function floorYForRadius(r){ return FLOOR_Y - r; }
 
   // ---------- Spark particles ----------
@@ -400,6 +409,15 @@
     const p = pointerPos(e);
     const w = toWorld(p.x, p.y);
 
+// Tap the wall frame = open image picker (so you can set the tavla yourself)
+const f = props.frame;
+if (upload && w.x >= f.x && w.x <= f.x + f.w && w.y >= f.y && w.y <= f.y + f.h){
+  toast("Välj en bild till tavlan");
+  pop(0.35);
+  try { upload.click(); } catch(_){}
+  return;
+}
+
     // hit ornament? (drag)
     for (const o of ornaments){
       const oy = floorYForRadius(o.r);
@@ -460,6 +478,18 @@
       const touch = e.touches[0];
       const rect = canvas.getBoundingClientRect();
       const x = touch.clientX - rect.left;
+
+const y = touch.clientY - rect.top;
+const w = toWorld(x, y);
+
+// Tap the wall frame = open image picker
+const f = props.frame;
+if (upload && w.x >= f.x && w.x <= f.x + f.w && w.y >= f.y && w.y <= f.y + f.h){
+  toast("Välj en bild till tavlan");
+  pop(0.35);
+  try { upload.click(); } catch(_){}
+  return;
+}
 
       // Only left half of the canvas = movement joystick
       if (x < rect.width / 2){
