@@ -6,6 +6,7 @@ const ASSETS = [
   "./style.css",
   "./main.js",
   "./assets/julbild.jpg",
+  "./assets/tavla.jpg",
 ];
 
 self.addEventListener("install", (event) => {
