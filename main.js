@@ -1,8 +1,14 @@
 (() => {
   "use strict";
+  // Notes:
+  // - Side-view room (2D). Jesper can walk across the whole room (no prop-blocking).
+  // - Props (table/chair/tree) are drawn much clearer.
+  // - Jesper is rendered as a tiny pixel-sprite on an offscreen canvas, then scaled up.
+
   const $ = (id) => document.getElementById(id);
   const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
   const lerp = (a,b,t)=>a+(b-a)*t;
+  const dist = (ax,ay,bx,by)=>Math.hypot(ax-bx, ay-by);
 
   // ===== Countdown (7 Jan 2026 06:00 CET = 05:00 UTC) =====
   const countdownEl = $("countdownValue");
@@ -46,7 +52,7 @@
     clearTimeout(toast._t);
     toast._t = setTimeout(()=>toastEl.classList.add("hidden"), ms);
   }
-  function bubble(msg, ms=1500){
+  function bubble(msg, ms=1600){
     if(!bubbleEl) return;
     bubbleEl.textContent = msg;
     bubbleEl.classList.remove("hidden");
@@ -59,13 +65,13 @@
 
   closeWonderBtn?.addEventListener("click", ()=>{
     wonder?.classList.add("hidden");
-    bubble("Tillbaka i rummet. Självklart.", 1400);
+    bubble("Tillbaka. Det var bara en sekund av lycka.", 1500);
   });
 
-  if(wonderImg){
-    wonderImg.addEventListener("error", ()=>{
+  if (wonderImg && wonderFallback){
+    wonderImg.addEventListener("error", () => {
       wonderImg.classList.add("hidden");
-      wonderFallback?.classList.remove("hidden");
+      wonderFallback.classList.remove("hidden");
     });
   }
 
@@ -82,13 +88,13 @@
     const o = audioCtx.createOscillator();
     const g = audioCtx.createGain();
     o.type = "square";
-    o.frequency.setValueAtTime(140 + Math.random()*90, now);
-    o.frequency.exponentialRampToValueAtTime(92, now+0.14);
+    o.frequency.setValueAtTime(160 + Math.random()*90, now);
+    o.frequency.exponentialRampToValueAtTime(90, now+0.16);
     g.gain.setValueAtTime(0.0001, now);
     g.gain.exponentialRampToValueAtTime(0.085*intensity, now+0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, now+0.20);
+    g.gain.exponentialRampToValueAtTime(0.0001, now+0.22);
     o.connect(g); g.connect(audioCtx.destination);
-    o.start(now); o.stop(now+0.22);
+    o.start(now); o.stop(now+0.24);
   }
   function jingle(){
     if(!audioEnabled) return;
@@ -113,7 +119,7 @@
     if(audioEnabled){
       ensureAudio();
       if(audioCtx.state==="suspended") await audioCtx.resume();
-      toast("Ljud på. Jesper är… närvarande.");
+      toast("Ljud på. (Diskret gubbljud aktiverat.)");
       grunt(1.0);
     } else toast("Ljud av.");
   });
@@ -122,8 +128,12 @@
   if(!canvas){ console.warn("Canvas #game saknas."); return; }
   const ctx = canvas.getContext("2d", {alpha:false});
 
-  const WORLD = { w: 540, h: 520 };
+  // Fixed world: side-view (keep it SIMPLE)
+  const WORLD = { w: 900, h: 420 };
   const view = { s:1, ox:0, oy:0, cssW:0, cssH:0 };
+
+  const ROOM = { x: 50, y: 52, w: 800, h: 280 };
+  const FLOOR_Y = ROOM.y + ROOM.h - 42;
 
   function resize(){
     const rect = canvas.getBoundingClientRect();
@@ -134,174 +144,93 @@
     view.cssW = rect.width;
     view.cssH = rect.height;
 
-    view.s = rect.width / WORLD.w;  // fill width
+    view.s = rect.width / WORLD.w;            // fill width
     view.ox = (rect.width - WORLD.w*view.s)/2;
-    view.oy = 6;                    // top-align
+    view.oy = 8;                              // top align
   }
   window.addEventListener("resize", resize, {passive:true});
   resize();
 
-  function toWorld(px,py){ return { x:(px-view.ox)/view.s, y:(py-view.oy)/view.s }; }
-
-  // ===== RoundRect helper =====
-  function rrPath(x,y,w,h,r){
+  // ===== Helpers =====
+  function roundRectPath(x,y,w,h,r){
     const rr = Math.min(r, w/2, h/2);
     ctx.beginPath();
-    ctx.moveTo(x+rr,y);
-    ctx.arcTo(x+w,y, x+w,y+h, rr);
-    ctx.arcTo(x+w,y+h, x,y+h, rr);
-    ctx.arcTo(x,y+h, x,y, rr);
-    ctx.arcTo(x,y, x+w,y, rr);
+    ctx.moveTo(x+rr, y);
+    ctx.arcTo(x+w, y,   x+w, y+h, rr);
+    ctx.arcTo(x+w, y+h, x,   y+h, rr);
+    ctx.arcTo(x,   y+h, x,   y,   rr);
+    ctx.arcTo(x,   y,   x+w, y,   rr);
     ctx.closePath();
   }
-
-  // ===== Room geometry (more “boxed room”) =====
-  const ROOM = { x: 18, y: 14, w: WORLD.w-36, h: WORLD.h-30 };
-  const WALL_TOP = ROOM.y + 10;
-
-  // Floor trapezoid
-  const F = {
-    TL:{x: ROOM.x + 132, y: ROOM.y + 150},
-    TR:{x: ROOM.x + ROOM.w - 132, y: ROOM.y + 150},
-    BR:{x: ROOM.x + ROOM.w - 24, y: ROOM.y + ROOM.h - 22},
-    BL:{x: ROOM.x + 24, y: ROOM.y + ROOM.h - 22}
-  };
-
-  function floorToScreen(u,v){
-    const topX = lerp(F.TL.x, F.TR.x, u);
-    const topY = lerp(F.TL.y, F.TR.y, u);
-    const botX = lerp(F.BL.x, F.BR.x, u);
-    const botY = lerp(F.BL.y, F.BR.y, u);
-    return { x: lerp(topX, botX, v), y: lerp(topY, botY, v) };
+  function rrFillStroke(x,y,w,h,r,fill,stroke="#111827",lw=4){
+    ctx.fillStyle=fill;
+    ctx.strokeStyle=stroke;
+    ctx.lineWidth=lw;
+    roundRectPath(x,y,w,h,r);
+    ctx.fill();
+    ctx.stroke();
+  }
+  function circleFill(x,y,r,fill){
+    ctx.fillStyle=fill;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  }
+  function shadowEllipse(x,y,rx,ry,a=0.14){
+    ctx.save();
+    ctx.globalAlpha=a;
+    ctx.fillStyle="#111827";
+    ctx.beginPath();
+    ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
   }
 
-  function dragToRoomVec(dx,dy){
-    const du = clamp(dx/220, -1, 1);
-    const dv = clamp(dy/210, -1, 1);
-    return {du,dv};
-  }
-
-  function screenToFloorUV(wx,wy){
-    let bestU=0.5, bestV=0.7, bestD=1e18;
-    for(let vi=0;vi<=24;vi++){
-      const v=vi/24;
-      for(let ui=0;ui<=24;ui++){
-        const u=ui/24;
-        const p=floorToScreen(u,v);
-        const dx=wx-p.x, dy=wy-p.y;
-        const d=dx*dx+dy*dy;
-        if(d<bestD){bestD=d; bestU=u; bestV=v;}
-      }
-    }
-    const u0=bestU, v0=bestV;
-    bestD=1e18;
-    for(let vi=-14;vi<=14;vi++){
-      const v=clamp(v0+vi/280,0,1);
-      for(let ui=-14;ui<=14;ui++){
-        const u=clamp(u0+ui/280,0,1);
-        const p=floorToScreen(u,v);
-        const dx=wx-p.x, dy=wy-p.y;
-        const d=dx*dx+dy*dy;
-        if(d<bestD){bestD=d; bestU=u; bestV=v;}
-      }
-    }
-    return {u:bestU,v:bestV};
-  }
-
-  // ===== Tavla JPG =====
+  // ===== Assets: Tavla (optional) =====
   const tavla = new Image();
   let tavlaLoaded=false;
   tavla.onload=()=>{tavlaLoaded=true;};
   tavla.onerror=()=>{tavlaLoaded=false;};
   tavla.src="assets/tavla.jpg?v=1";
 
-  // ===== Props =====
+  // ===== Props (clear silhouettes) =====
   const props = {
-    table:{ u:0.26, v:0.66, w:0.34, h:0.16 }, // obstacle footprint
-    chair:{ u:0.54, v:0.63, w:0.15, h:0.13 },
-    tree: { u:0.83, v:0.62, w:0.18, h:0.18 },
-    frame:{ x: ROOM.x + 56, y: WALL_TOP + 38, w: 132, h: 92 }
+    frame: { x: ROOM.x+40, y: ROOM.y+34, w: 140, h: 98 },
+    table: { x: ROOM.x+175, w: 280 },
+    chair: { x: ROOM.x+520, w: 140 },
+    tree:  { x: ROOM.x+720, w: 130 }
   };
 
+  // ===== Entities =====
   const state = {
-    joy:{active:false, sx:0, sy:0, dx:0, dy:0},
+    joy:{active:false, sx:0, sy:0, dx:0},
     dragging:null,
-    secret:{step:0, unlocked:false},
-    sitting:false,
     kickT:0,
-    nextTalk: performance.now() + 1100 + Math.random()*1600,
-    puffs:[]
+    sitting:false,
+    secret:{step:0, unlocked:false},
+    nextTalk: performance.now() + 900 + Math.random()*1200,
   };
 
-  const jesper = { u:0.20, v:0.83, du:0, dv:0, speed:0.55, r:0.050 };
+  const jesper = { x: ROOM.x+130, vx:0, facing: 1, action:"idle", actionT:0 };
 
   const ornaments = [
-    {id:"clock", label:"⏰", u:0.18, v:0.86, du:0, dv:0, r:0.040, base:"#fde047"},
-    {id:"candy", label:"🍬", u:0.38, v:0.86, du:0, dv:0, r:0.040, base:"#fb7185"},
-    {id:"star",  label:"⭐", u:0.58, v:0.86, du:0, dv:0, r:0.040, base:"#60a5fa"},
+    {id:"clock", label:"⏰", x: ROOM.x+260, y:FLOOR_Y, vx:0, r:19, base:"#fde047"},
+    {id:"candy", label:"🍬", x: ROOM.x+360, y:FLOOR_Y, vx:0, r:19, base:"#fb7185"},
+    {id:"star",  label:"⭐", x: ROOM.x+460, y:FLOOR_Y, vx:0, r:19, base:"#60a5fa"},
   ];
-
-  // ===== Obstacles + “no-stuck” movement =====
-  const OBST = () => ([ props.table, props.chair, props.tree ]);
-
-  function insideExpanded(u,v, rect, pad){
-    const x0=rect.u-rect.w/2-pad, x1=rect.u+rect.w/2+pad;
-    const y0=rect.v-rect.h/2-pad, y1=rect.v+rect.h/2+pad;
-    return (u>x0 && u<x1 && v>y0 && v<y1);
-  }
-
-  function clampRoom(obj){
-    obj.u = clamp(obj.u, 0.05, 0.95);
-    obj.v = clamp(obj.v, 0.40, 0.95);
-  }
-
-  function collideAndSlide(obj, radius, tryU, tryV){
-    const prevU=obj.u, prevV=obj.v;
-    obj.u = tryU; obj.v = tryV;
-    clampRoom(obj);
-
-    let hit=false;
-    const pad = radius + 0.008; // small -> not sticky
-    for(const r of OBST()){
-      if(insideExpanded(obj.u,obj.v,r,pad)){ hit=true; break; }
-    }
-    if(!hit) return;
-
-    // slide U-only
-    obj.u = tryU; obj.v = prevV;
-    clampRoom(obj);
-    hit=false;
-    for(const r of OBST()){
-      if(insideExpanded(obj.u,obj.v,r,pad)){ hit=true; break; }
-    }
-    if(!hit) return;
-
-    // slide V-only
-    obj.u = prevU; obj.v = tryV;
-    clampRoom(obj);
-    hit=false;
-    for(const r of OBST()){
-      if(insideExpanded(obj.u,obj.v,r,pad)){ hit=true; break; }
-    }
-    if(!hit) return;
-
-    obj.u = prevU; obj.v = prevV; // blocked
-  }
 
   // ===== Secret =====
   function advanceSecret(id){
     if(state.secret.unlocked) return;
-    const stepId = state.secret.step===0?"clock":state.secret.step===1?"candy":state.secret.step===2?"star":null;
-    if(id===stepId){
+    const want = state.secret.step===0?"clock":state.secret.step===1?"candy":state.secret.step===2?"star":null;
+    if(id===want){
       state.secret.step++;
       toast(`Hemligheten: ${state.secret.step}/3`);
-      if(state.secret.step===3) bubble("SITT på stolen. Nu.", 1400);
+      if(state.secret.step===3) bubble("SITT på stolen. Nu.", 1300);
       grunt(1.0);
       return;
     }
     state.secret.step=0;
     toast("Fel ordning. Julen nekade.");
-    grunt(0.9);
+    grunt(0.8);
   }
   function unlockWonder(){
     if(state.secret.unlocked) return;
@@ -311,53 +240,76 @@
     wonder?.classList.remove("hidden");
   }
 
+  // ===== Movement / physics =====
+  function resolveWallsX(x, r){
+    return clamp(x, ROOM.x + r, ROOM.x + ROOM.w - r);
+  }
+  function resolveOrnament(o){
+    // walls
+    const minX = ROOM.x + o.r;
+    const maxX = ROOM.x + ROOM.w - o.r;
+    if(o.x < minX){ o.x=minX; o.vx*=-0.55; }
+    if(o.x > maxX){ o.x=maxX; o.vx*=-0.55; }
+
+    // table / chair / tree are "solid-ish" for ornaments only
+    const blocks = [
+      {x: props.table.x+18, w: 28},
+      {x: props.table.x+props.table.w-46, w: 28},
+      {x: props.chair.x+12, w: props.chair.w-24},
+      {x: props.tree.x+56, w: 22},
+    ];
+    for(const b of blocks){
+      const left = b.x - o.r;
+      const right= b.x + b.w + o.r;
+      if(o.x > left && o.x < right){
+        if(o.vx >= 0) o.x = left;
+        else o.x = right;
+        o.vx *= -0.48;
+      }
+    }
+  }
+
   // ===== Actions =====
   function nearestOrnament(){
     let best=null, bestD=1e18;
     for(const o of ornaments){
-      const dx=jesper.u-o.u, dy=jesper.v-o.v;
-      const d=dx*dx+dy*dy;
+      const d = Math.abs(o.x - jesper.x);
       if(d<bestD){bestD=d; best=o;}
     }
-    return {o:best, d:Math.sqrt(bestD)};
-  }
-  function addPuff(u,v,str){
-    state.puffs.push({u,v,a:1,r:0.012+Math.random()*0.014*str, du:(Math.random()*2-1)*0.16, dv:(Math.random()*2-1)*0.16});
-    if(state.puffs.length>28) state.puffs.shift();
+    return {o:best, d:bestD};
   }
 
   function doKnuff(){
     if(wonder && !wonder.classList.contains("hidden")) return;
-    state.kickT=0.25;
+    state.kickT=0.22;
+    jesper.action="kick"; jesper.actionT=0.0;
+
     const {o,d}=nearestOrnament();
-    if(!o || d>0.22){
+    if(!o || d>88){
       bubble("Knuffade luft. KPI: oklart.", 1400);
-      grunt(0.7);
+      grunt(0.75);
       return;
     }
-    let vx=o.u-jesper.u, vy=o.v-jesper.v;
-    const L=Math.hypot(vx,vy)||1;
-    vx/=L; vy/=L;
-    o.du += vx*(1.45 + Math.random()*0.35);
-    o.dv += vy*(1.20 + Math.random()*0.35);
-    addPuff(o.u,o.v,1.0);
+    const dir = (o.x>=jesper.x) ? 1 : -1;
+    o.vx += dir*(380 + Math.random()*140);
     bubble(`KNUFF! (${o.label})`, 900);
-    grunt(1.05);
+    grunt(1.0);
     advanceSecret(o.id);
   }
+
   function doSit(){
     if(wonder && !wonder.classList.contains("hidden")) return;
-    const du=jesper.u-props.chair.u, dv=jesper.v-props.chair.v;
-    const near=Math.hypot(du,dv)<0.22;
+    const near = Math.abs(jesper.x - (props.chair.x + props.chair.w/2)) < 84;
     if(!near){
       bubble("Satt… i själen. Inte på stolen.", 1500);
       grunt(0.65);
       return;
     }
     state.sitting=true;
-    bubble("🪑 “Jag är bara… en gubbe i ett rum.”", 1600);
+    jesper.action="sit"; jesper.actionT=0.0;
+    bubble("🪑 “Jag är bara… en gubbe i ett rum.”", 1700);
     grunt(0.85);
-    setTimeout(()=>state.sitting=false, 900);
+    setTimeout(()=>{ state.sitting=false; jesper.action="idle"; }, 900);
 
     if(state.secret.step===3 && !state.secret.unlocked){
       toast("Kombination fullbordad!");
@@ -370,16 +322,18 @@
   kickBtn?.addEventListener("click", doKnuff);
   sitBtn?.addEventListener("click", doSit);
 
-  // ===== Input =====
+  // ===== Input (drag to move; drag ornament to move ornament) =====
   function pointerPos(e){
     const r = canvas.getBoundingClientRect();
     return {x:e.clientX-r.left, y:e.clientY-r.top};
   }
-  function hitTestOrnamentScreen(wx,wy){
+  function toWorld(px,py){
+    return { x:(px-view.ox)/view.s, y:(py-view.oy)/view.s };
+  }
+  function hitOrnament(wx,wy){
     for(const o of ornaments){
-      const p=floorToScreen(o.u,o.v);
-      const dx=wx-p.x, dy=wy-p.y;
-      if(dx*dx+dy*dy < (28*28)) return o;
+      const oy = o.y;
+      if(dist(wx,wy, o.x, oy) < (o.r+10)) return o;
     }
     return null;
   }
@@ -389,18 +343,20 @@
     const p=pointerPos(e);
     const w=toWorld(p.x,p.y);
 
-    const hit=hitTestOrnamentScreen(w.x,w.y);
+    const hit = hitOrnament(w.x,w.y);
     if(hit){
       state.dragging=hit;
-      hit.du=0; hit.dv=0;
+      hit.vx=0;
       canvas.setPointerCapture(e.pointerId);
       toast("Flyttar pynt.");
       grunt(0.7);
       return;
     }
+
     state.joy.active=true;
-    state.joy.sx=p.x; state.joy.sy=p.y;
-    state.joy.dx=0; state.joy.dy=0;
+    state.joy.sx=p.x;
+    state.joy.sy=p.y;
+    state.joy.dx=0;
     canvas.setPointerCapture(e.pointerId);
   }, {passive:false});
 
@@ -410,38 +366,135 @@
     const w=toWorld(p.x,p.y);
 
     if(state.dragging){
-      const uv=screenToFloorUV(w.x,w.y);
-      state.dragging.u=uv.u; state.dragging.v=uv.v;
-      clampRoom(state.dragging);
+      state.dragging.x = resolveWallsX(w.x, state.dragging.r);
+      resolveOrnament(state.dragging);
       return;
     }
     if(state.joy.active){
-      state.joy.dx = clamp(p.x-state.joy.sx, -150, 150);
-      state.joy.dy = clamp(p.y-state.joy.sy, -150, 150);
+      // horizontal only (NO "flying")
+      state.joy.dx = clamp(p.x - state.joy.sx, -150, 150);
     }
   }, {passive:false});
 
   function endPointer(){
     state.dragging=null;
     state.joy.active=false;
-    state.joy.dx=0; state.joy.dy=0;
+    state.joy.dx=0;
   }
   canvas.addEventListener("pointerup", endPointer, {passive:false});
   canvas.addEventListener("pointercancel", endPointer, {passive:false});
 
-  // ===== Drawing helpers =====
-  function shadowAt(u,v,rx,ry,a){
-    const p=floorToScreen(u,v);
-    ctx.save();
-    ctx.globalAlpha=a;
-    ctx.fillStyle="#111827";
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y+12, rx, ry, 0, 0, Math.PI*2);
-    ctx.fill();
-    ctx.restore();
+  // ===== Talk bubbles =====
+  function maybeTalk(){
+    const t = performance.now();
+    if(t < state.nextTalk) return;
+    const lines=[
+      "Det här känns som ett möte utan agenda.",
+      "Jag gick hit för kaffe. Jag fann… vägg.",
+      "Tre pynt. Noll mening. Perfekt.",
+      "Jag vill ha en ticket: Fönster i rummet.",
+      "Jag är en gubbe i ett rum. Det är allt."
+    ];
+    if(Math.random()<0.55) bubble(lines[(Math.random()*lines.length)|0], 1750);
+    state.nextTalk = t + 2600 + Math.random()*2600;
   }
 
+  // ===== Pixel-sprite Jesper (offscreen) =====
+  const spr = document.createElement("canvas");
+  spr.width = 64; spr.height=64;
+  const sctx = spr.getContext("2d");
+
+  function pix(x,y,w,h,c){ sctx.fillStyle=c; sctx.fillRect(x|0,y|0,w|0,h|0); }
+  function pixC(x,y,r,c){
+    sctx.fillStyle=c;
+    sctx.beginPath(); sctx.arc(x,y,r,0,Math.PI*2); sctx.fill();
+  }
+
+  function drawJesperSprite(frame, action, facing){
+    sctx.clearRect(0,0,64,64);
+    sctx.imageSmoothingEnabled = false;
+
+    const OUT="#0b1220";
+    const SKIN="#f6d7b5";
+    const HAIR="#7a3b19";
+    const HAIR2="#c46a35";
+    const HOOD="#111827";
+    const PANTS="#9ca3af";
+    const SHOE="#7a4a24";
+    const GLD="#1f1f1f";
+    const GLB="#6b3f1f";
+    const GLT="#d6b98f";
+
+    // shadow
+    pixC(32, 58, 12, "rgba(11,18,32,0.18)");
+
+    let bob = (action==="walk") ? (frame%2===0?0:1) : 0;
+    let arm = (action==="walk") ? (frame%4<2?1:-1) : 0;
+    let leg = (action==="walk") ? (frame%4<2?-1:1) : 0;
+
+    if(action==="sit"){ bob=2; arm=0; leg=0; }
+    if(action==="kick"){ arm=1; leg=1; }
+
+    const baseY = 44 + bob;
+    const fx = facing<0 ? -1 : 1;
+
+    function fxX(x){ return fx<0 ? (64 - x) : x; }
+
+    // legs
+    pix(fxX(26), baseY+6, 5, 10, PANTS);
+    pix(fxX(33), baseY+6, 5, 10, PANTS);
+    pix(fxX(25+leg*1), baseY+14, 7, 4, SHOE);
+    pix(fxX(32-leg*1), baseY+14, 7, 4, SHOE);
+
+    // hoodie/body
+    pix(fxX(22), baseY-8, 20, 18, HOOD);
+
+    // arms
+    pix(fxX(18), baseY-6, 5, 10, HOOD);
+    pix(fxX(41), baseY-6, 5, 10, HOOD);
+    pix(fxX(18), baseY+3, 5, 5, SKIN);
+    pix(fxX(41), baseY+3, 5, 5, SKIN);
+
+    // head
+    pixC(32, baseY-18, 10, SKIN);
+    // hair curls (curly brown-red)
+    pixC(24, baseY-26, 5, HAIR);
+    pixC(32, baseY-28, 6, HAIR);
+    pixC(40, baseY-26, 5, HAIR);
+    pixC(28, baseY-29, 3, HAIR2);
+    pixC(36, baseY-29, 3, HAIR2);
+
+    // glasses (tortoise)
+    pix(fxX(24), baseY-22, 8, 6, GLB);
+    pix(fxX(34), baseY-22, 8, 6, GLD);
+    pix(fxX(24), baseY-22, 8, 1, OUT);
+    pix(fxX(34), baseY-22, 8, 1, OUT);
+    pix(fxX(24), baseY-17, 8, 1, OUT);
+    pix(fxX(34), baseY-17, 8, 1, OUT);
+    pix(fxX(31), baseY-20, 2, 2, GLT);
+
+    // eyes & mouth
+    const blink = (action==="idle" && Math.random()<0.02);
+    if(blink){
+      pix(28, baseY-20, 3, 1, OUT);
+      pix(36, baseY-20, 3, 1, OUT);
+    } else {
+      pixC(29, baseY-20, 1.4, OUT);
+      pixC(37, baseY-20, 1.4, OUT);
+    }
+    if(action==="kick"){
+      pixC(33, baseY-14, 3.2, OUT);
+    } else if(action==="sit"){
+      pix(30, baseY-14, 7, 2, OUT);
+    } else {
+      pixC(33, baseY-14, 2.6, OUT);
+      pix(30, baseY-14, 7, 1, SKIN);
+    }
+  }
+
+  // ===== Drawing (world) =====
   function drawRoom(){
+    // full canvas (in CSS pixels)
     ctx.fillStyle="#ffffff";
     ctx.fillRect(0,0,view.cssW,view.cssH);
 
@@ -449,98 +502,50 @@
     ctx.translate(view.ox, view.oy);
     ctx.scale(view.s, view.s);
 
-    // panel
-    ctx.fillStyle="#f4f6ff";
-    rrPath(ROOM.x, ROOM.y, ROOM.w, ROOM.h, 24);
-    ctx.fill();
+    // panel background
+    rrFillStroke(ROOM.x-16, ROOM.y-18, ROOM.w+32, ROOM.h+36, 26, "#f4f6ff", "#111827", 4);
 
-    // back wall
-    const g = ctx.createLinearGradient(0, WALL_TOP, 0, F.TL.y);
-    g.addColorStop(0, "#ffffff");
-    g.addColorStop(1, "#f1f5ff");
-    ctx.fillStyle=g;
-    ctx.fillRect(ROOM.x, WALL_TOP, ROOM.w, F.TL.y - WALL_TOP);
+    // wall
+    const wallGrad = ctx.createLinearGradient(0, ROOM.y, 0, FLOOR_Y-18);
+    wallGrad.addColorStop(0, "#ffffff");
+    wallGrad.addColorStop(1, "#f2f5ff");
+    ctx.fillStyle = wallGrad;
+    ctx.fillRect(ROOM.x, ROOM.y, ROOM.w, FLOOR_Y-ROOM.y);
 
-    // side walls
-    ctx.fillStyle="#f8fafc";
+    // subtle wall glow
+    ctx.save();
+    ctx.globalAlpha=0.10;
+    ctx.fillStyle="#60a5fa";
     ctx.beginPath();
-    ctx.moveTo(ROOM.x, WALL_TOP);
-    ctx.lineTo(F.TL.x, F.TL.y);
-    ctx.lineTo(F.BL.x, F.BL.y);
-    ctx.lineTo(ROOM.x, ROOM.y + ROOM.h);
-    ctx.closePath();
+    ctx.ellipse(ROOM.x+ROOM.w*0.62, ROOM.y+ROOM.h*0.30, 240, 120, 0, 0, Math.PI*2);
     ctx.fill();
+    ctx.restore();
 
-    ctx.beginPath();
-    ctx.moveTo(ROOM.x+ROOM.w, WALL_TOP);
-    ctx.lineTo(F.TR.x, F.TR.y);
-    ctx.lineTo(F.BR.x, F.BR.y);
-    ctx.lineTo(ROOM.x+ROOM.w, ROOM.y + ROOM.h);
-    ctx.closePath();
-    ctx.fill();
+    // floor
+    const floorGrad = ctx.createLinearGradient(0, FLOOR_Y-30, 0, ROOM.y+ROOM.h);
+    floorGrad.addColorStop(0, "#eef2ff");
+    floorGrad.addColorStop(1, "#e9edff");
+    ctx.fillStyle = floorGrad;
+    ctx.fillRect(ROOM.x, FLOOR_Y-18, ROOM.w, ROOM.y+ROOM.h-(FLOOR_Y-18));
 
-    // floor gradient (not chessboard)
-    const fg = ctx.createLinearGradient(0, F.TL.y, 0, F.BL.y);
-    fg.addColorStop(0, "#eef2ff");
-    fg.addColorStop(1, "#e9edff");
-    ctx.fillStyle=fg;
-    ctx.beginPath();
-    ctx.moveTo(F.TL.x,F.TL.y);
-    ctx.lineTo(F.TR.x,F.TR.y);
-    ctx.lineTo(F.BR.x,F.BR.y);
-    ctx.lineTo(F.BL.x,F.BL.y);
-    ctx.closePath();
-    ctx.fill();
+    // baseboard + floor line
+    ctx.strokeStyle="rgba(17,24,39,0.26)";
+    ctx.lineWidth=6;
+    ctx.beginPath(); ctx.moveTo(ROOM.x, FLOOR_Y-18); ctx.lineTo(ROOM.x+ROOM.w, FLOOR_Y-18); ctx.stroke();
 
-    // subtle seams
-    ctx.strokeStyle="rgba(17,24,39,0.06)";
-    ctx.lineWidth=2;
-    for(let i=1;i<=6;i++){
-      const u=i/7;
-      const p0=floorToScreen(u,0), p1=floorToScreen(u,1);
-      ctx.beginPath(); ctx.moveTo(p0.x,p0.y); ctx.lineTo(p1.x,p1.y); ctx.stroke();
-    }
-    for(let i=1;i<=5;i++){
-      const v=i/6;
-      const p0=floorToScreen(0,v), p1=floorToScreen(1,v);
-      ctx.beginPath(); ctx.moveTo(p0.x,p0.y); ctx.lineTo(p1.x,p1.y); ctx.stroke();
-    }
-
-    // baseboards and corner cue
-    ctx.strokeStyle="rgba(17,24,39,0.24)";
+    ctx.strokeStyle="#111827";
     ctx.lineWidth=5;
-    ctx.beginPath(); ctx.moveTo(F.TL.x, F.TL.y); ctx.lineTo(F.TR.x, F.TR.y); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(F.TL.x, F.TL.y); ctx.lineTo(ROOM.x, WALL_TOP); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(F.TR.x, F.TR.y); ctx.lineTo(ROOM.x+ROOM.w, WALL_TOP); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ROOM.x, FLOOR_Y); ctx.lineTo(ROOM.x+ROOM.w, FLOOR_Y); ctx.stroke();
 
-    ctx.strokeStyle="rgba(17,24,39,0.18)";
-    ctx.lineWidth=3;
-    ctx.beginPath();
-    ctx.moveTo(ROOM.x + ROOM.w*0.50, WALL_TOP);
-    ctx.lineTo(lerp(F.TL.x, F.TR.x, 0.50), F.TL.y);
-    ctx.stroke();
-
-    // floor outline
+    // room outline
     ctx.strokeStyle="#111827";
     ctx.lineWidth=4;
-    ctx.beginPath();
-    ctx.moveTo(F.TL.x,F.TL.y);
-    ctx.lineTo(F.TR.x,F.TR.y);
-    ctx.lineTo(F.BR.x,F.BR.y);
-    ctx.lineTo(F.BL.x,F.BL.y);
-    ctx.closePath();
-    ctx.stroke();
+    rrFillStroke(ROOM.x, ROOM.y, ROOM.w, ROOM.h, 22, "rgba(0,0,0,0)", "#111827", 4);
 
     // caption
-    ctx.fillStyle="rgba(17,24,39,0.22)";
+    ctx.fillStyle="rgba(17,24,39,0.20)";
     ctx.font="900 12px ui-monospace, monospace";
-    ctx.fillText("RUM 01 — KALT / TYDLIGT / JUL", ROOM.x+22, ROOM.y+ROOM.h-14);
-
-    // border
-    ctx.strokeStyle="#111827";
-    ctx.lineWidth=4;
-    rrPath(ROOM.x, ROOM.y, ROOM.w, ROOM.h, 24);
-    ctx.stroke();
+    ctx.fillText("RUM 01 — KALT / TYDLIGT / JUL / KAFFE", ROOM.x+18, ROOM.y+ROOM.h-16);
 
     ctx.restore();
   }
@@ -551,18 +556,14 @@
     ctx.scale(view.s, view.s);
 
     const f=props.frame;
-    const maxY = F.TL.y - f.h - 14;
-    const y = Math.min(f.y, maxY);
 
-    ctx.fillStyle="#ffffff";
-    ctx.strokeStyle="#111827";
-    ctx.lineWidth=4;
-    rrPath(f.x, y, f.w, f.h, 14); ctx.fill(); ctx.stroke();
+    // frame border
+    rrFillStroke(f.x, f.y, f.w, f.h, 14, "#ffffff", "#111827", 4);
 
-    const ix=f.x+7, iy=y+7, iw=f.w-14, ih=f.h-14;
+    const ix=f.x+7, iy=f.y+7, iw=f.w-14, ih=f.h-14;
     if(tavlaLoaded && tavla.naturalWidth>0){
       ctx.save();
-      rrPath(ix,iy,iw,ih,10); ctx.clip();
+      roundRectPath(ix,iy,iw,ih,10); ctx.clip();
       const imgAR=tavla.naturalWidth/tavla.naturalHeight;
       const boxAR=iw/ih;
       let dx=ix, dy=iy, dw=iw, dh=ih;
@@ -570,370 +571,316 @@
       else { dw=iw; dh=iw/imgAR; dy=iy-(dh-ih)/2; }
       ctx.drawImage(tavla, dx, dy, dw, dh);
       ctx.restore();
+
       ctx.save();
       ctx.globalAlpha=0.10;
       ctx.fillStyle="#60a5fa";
-      rrPath(ix,iy,iw,ih,10); ctx.fill();
+      rrFillStroke(ix,iy,iw,ih,10,"rgba(96,165,250,0.15)","rgba(0,0,0,0)",0);
       ctx.restore();
     } else {
       ctx.fillStyle="#f3f4f6";
-      rrPath(ix,iy,iw,ih,10); ctx.fill();
+      roundRectPath(ix,iy,iw,ih,10); ctx.fill();
       ctx.strokeStyle="rgba(17,24,39,0.18)";
       ctx.setLineDash([6,6]);
       ctx.strokeRect(ix+4, iy+4, iw-8, ih-8);
       ctx.setLineDash([]);
       ctx.fillStyle="rgba(17,24,39,0.45)";
-      ctx.font="900 11px ui-monospace, monospace";
-      ctx.fillText("TAVLA", f.x+24, y+32);
+      ctx.font="1000 11px ui-monospace, monospace";
+      ctx.fillText("TAVLA", f.x+22, f.y+34);
       ctx.fillStyle="rgba(17,24,39,0.26)";
       ctx.font="900 10px ui-monospace, monospace";
-      ctx.fillText("(lägg tavla.jpg)", f.x+12, y+54);
+      ctx.fillText("(lägg tavla.jpg)", f.x+12, f.y+56);
     }
 
     ctx.restore();
   }
 
-  // Furniture
   function drawTable(){
-    const t=props.table;
-    const p=floorToScreen(t.u,t.v);
-    const s=1 - t.v*0.10;
-    shadowAt(t.u,t.v, 74*s, 12*s, 0.12);
-
-    const W=220*s, H=120*s, skew=W*0.24;
-
-    ctx.strokeStyle="#111827";
-    ctx.lineWidth=4;
-
-    ctx.fillStyle="#ffffff";
-    ctx.beginPath();
-    ctx.moveTo(p.x - W*0.55, p.y - H*0.60);
-    ctx.lineTo(p.x + W*0.55, p.y - H*0.60);
-    ctx.lineTo(p.x + W*0.55 + skew, p.y - H*0.32);
-    ctx.lineTo(p.x - W*0.55 + skew, p.y - H*0.32);
-    ctx.closePath();
-    ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle="#e5e7eb";
-    ctx.beginPath();
-    ctx.moveTo(p.x - W*0.50 + skew, p.y - H*0.30);
-    ctx.lineTo(p.x + W*0.50 + skew, p.y - H*0.30);
-    ctx.lineTo(p.x + W*0.50 + skew, p.y + H*0.02);
-    ctx.lineTo(p.x - W*0.50 + skew, p.y + H*0.02);
-    ctx.closePath();
-    ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle="#e5e7eb";
-    const legW=18*s, legH=62*s;
-    rrPath(p.x - 92*s + skew*0.16, p.y + H*0.00, legW, legH, 8*s); ctx.fill(); ctx.stroke();
-    rrPath(p.x + 64*s + skew*0.16, p.y + H*0.00, legW, legH, 8*s); ctx.fill(); ctx.stroke();
-    rrPath(p.x - 54*s + skew*0.62, p.y - 6*s, legW, legH, 8*s); ctx.fill(); ctx.stroke();
-    rrPath(p.x + 102*s + skew*0.62, p.y - 6*s, legW, legH, 8*s); ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle="#dbeafe";
-    rrPath(p.x + 66*s, p.y - 72*s, 22*s, 16*s, 6*s); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.arc(p.x + 90*s, p.y - 64*s, 7*s, -0.6, 0.6); ctx.stroke();
-  }
-
-  function drawChair(){
-    const c=props.chair;
-    const p=floorToScreen(c.u,c.v);
-    const s=1 - c.v*0.10;
-    shadowAt(c.u,c.v, 54*s, 10*s, 0.12);
-
-    const W=120*s, H=86*s, skew=W*0.26;
-
-    ctx.strokeStyle="#111827";
-    ctx.lineWidth=4;
-
-    ctx.fillStyle="#ffffff";
-    ctx.beginPath();
-    ctx.moveTo(p.x - W*0.55, p.y - H*0.22);
-    ctx.lineTo(p.x + W*0.55, p.y - H*0.22);
-    ctx.lineTo(p.x + W*0.55 + skew, p.y - H*0.00);
-    ctx.lineTo(p.x - W*0.55 + skew, p.y - H*0.00);
-    ctx.closePath();
-    ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle="#e5e7eb";
-    ctx.beginPath();
-    ctx.moveTo(p.x - W*0.55 + skew, p.y - H*0.00);
-    ctx.lineTo(p.x + W*0.55 + skew, p.y - H*0.00);
-    ctx.lineTo(p.x + W*0.55 + skew, p.y + H*0.28);
-    ctx.lineTo(p.x - W*0.55 + skew, p.y + H*0.28);
-    ctx.closePath();
-    ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle="#e5e7eb";
-    const legW=14*s, legH=52*s;
-    rrPath(p.x - 40*s + skew*0.18, p.y + H*0.18, legW, legH, 8*s); ctx.fill(); ctx.stroke();
-    rrPath(p.x + 18*s + skew*0.18, p.y + H*0.18, legW, legH, 8*s); ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle="#ffffff";
-    rrPath(p.x - 30*s, p.y - 136*s, 78*s, 62*s, 18*s); ctx.fill(); ctx.stroke();
-    ctx.fillStyle="rgba(17,24,39,0.28)";
-    ctx.font=`900 ${11*s}px ui-monospace, monospace`;
-    ctx.fillText("STOL", p.x-20*s, p.y-98*s);
-  }
-
-  function drawTree(tMs){
-    const tr=props.tree;
-    const p=floorToScreen(tr.u,tr.v);
-    const s=1 - tr.v*0.10;
-    shadowAt(tr.u,tr.v, 44*s, 9*s, 0.12);
-
-    ctx.fillStyle="#d1d5db";
-    ctx.strokeStyle="#111827";
-    ctx.lineWidth=4;
-    rrPath(p.x-9*s, p.y-20*s, 18*s, 38*s, 8*s); ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle="#dcfce7";
-    const tri=(cx,cy,w,h)=>{
-      ctx.beginPath();
-      ctx.moveTo(cx, cy-h);
-      ctx.lineTo(cx-w, cy+h*0.60);
-      ctx.lineTo(cx+w, cy+h*0.60);
-      ctx.closePath();
-      ctx.fill(); ctx.stroke();
-    };
-    tri(p.x, p.y-110*s, 52*s, 70*s);
-    tri(p.x, p.y-64*s, 70*s, 90*s);
-
-    ctx.font=`${26*s}px system-ui`;
-    ctx.fillText("⭐", p.x-12*s, p.y-146*s);
-    ctx.font=`${20*s}px system-ui`;
-    ctx.fillText("🔴", p.x-56*s, p.y-96*s);
-    ctx.fillText("🔴", p.x+34*s, p.y-84*s);
-    ctx.fillText("🔴", p.x-12*s, p.y-52*s);
-
-    const pulse=0.65+0.35*Math.sin(tMs/230);
-    ctx.save();
-    ctx.globalAlpha=0.12*pulse;
-    ctx.fillStyle="#60a5fa";
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y-70*s, 82*s, 98*s, 0, 0, Math.PI*2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  function drawOrnament(o){
-    shadowAt(o.u,o.v, 16, 5, 0.10);
-    const p=floorToScreen(o.u,o.v);
-    ctx.fillStyle=o.base;
-    ctx.strokeStyle="#111827";
-    ctx.lineWidth=4;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 19, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-    ctx.font="24px system-ui";
-    ctx.textAlign="center";
-    ctx.textBaseline="middle";
-    ctx.fillStyle="#111827";
-    ctx.fillText(o.label, p.x, p.y+1);
-    ctx.textAlign="start";
-    ctx.textBaseline="alphabetic";
-  }
-
-  function drawJesper(tMs){
-    const p=floorToScreen(jesper.u, jesper.v);
-    const s=(1 - jesper.v*0.12) * 1.24;
-    shadowAt(jesper.u, jesper.v, 26*s, 7*s, 0.14);
-
-    const moving = Math.hypot(jesper.du, jesper.dv) > 0.02 && !state.sitting;
-    const phase = moving ? (tMs/120) : 0;
-    const swing = moving ? Math.sin(phase) : 0;
-    const bob   = moving ? Math.sin(phase*2)*1.6 : 0;
-
-    const OUT="#111827", SKIN="#f6d7b5";
-    const HAIR="#7a3b19", HAIR2="#c46a35";
-    const HOOD="#111827", PANTS="#9ca3af", SHOE="#7a4a24";
-    const GL1="#1f1f1f", GL2="#784a24";
-
-    ctx.strokeStyle=OUT;
-    ctx.lineWidth=4;
-
-    ctx.fillStyle=PANTS;
-    rrPath(p.x-10*s + swing*2, p.y-8*s, 10*s, 18*s, 6*s); ctx.fill(); ctx.stroke();
-    rrPath(p.x+ 0*s - swing*2, p.y-8*s, 10*s, 18*s, 6*s); ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle=SHOE;
-    rrPath(p.x-14*s + swing*2, p.y+6*s, 14*s, 8*s, 6*s); ctx.fill(); ctx.stroke();
-    rrPath(p.x+ 0*s - swing*2, p.y+6*s, 14*s, 8*s, 6*s); ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle=HOOD;
-    rrPath(p.x-18*s, p.y-30*s + bob*0.5, 36*s, 28*s, 14*s); ctx.fill(); ctx.stroke();
-
-    rrPath(p.x-30*s, p.y-28*s + bob*0.5 + swing*1.2, 14*s, 10*s, 10*s); ctx.fill(); ctx.stroke();
-    rrPath(p.x+16*s,  p.y-28*s + bob*0.5 - swing*1.2, 14*s, 10*s, 10*s); ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle=SKIN;
-    rrPath(p.x-30*s, p.y-20*s + bob*0.5 + swing*1.2, 10*s, 8*s, 6*s); ctx.fill(); ctx.stroke();
-    rrPath(p.x+20*s,  p.y-20*s + bob*0.5 - swing*1.2, 10*s, 8*s, 6*s); ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle=SKIN;
-    ctx.beginPath(); ctx.arc(p.x, p.y-48*s + bob, 16*s, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle=HAIR;
-    ctx.beginPath();
-    ctx.arc(p.x-8*s, p.y-60*s + bob, 7*s, 0, Math.PI*2);
-    ctx.arc(p.x,     p.y-62*s + bob, 8*s, 0, Math.PI*2);
-    ctx.arc(p.x+9*s, p.y-59*s + bob, 7*s, 0, Math.PI*2);
-    ctx.fill(); ctx.stroke();
-    ctx.fillStyle=HAIR2;
-    ctx.beginPath();
-    ctx.arc(p.x-4*s, p.y-61*s + bob, 4*s, 0, Math.PI*2);
-    ctx.arc(p.x+6*s, p.y-61*s + bob, 4*s, 0, Math.PI*2);
-    ctx.fill();
-
-    ctx.fillStyle=GL2; rrPath(p.x-14*s, p.y-52*s + bob, 12*s, 10*s, 5*s); ctx.fill(); ctx.stroke();
-    ctx.fillStyle=GL1; rrPath(p.x+2*s,  p.y-52*s + bob, 12*s, 10*s, 5*s); ctx.fill(); ctx.stroke();
-
-    ctx.strokeStyle=GL2;
-    ctx.lineWidth=3;
-    ctx.beginPath(); ctx.moveTo(p.x-2*s, p.y-47*s + bob); ctx.lineTo(p.x+2*s, p.y-47*s + bob); ctx.stroke();
-
-    ctx.strokeStyle=OUT; ctx.lineWidth=4; ctx.fillStyle=OUT;
-    const blink = (!moving && Math.random()<0.02);
-    if(blink || state.sitting){
-      ctx.fillRect(p.x-6*s, p.y-46*s + bob, 5*s, 2*s);
-      ctx.fillRect(p.x+2*s, p.y-46*s + bob, 5*s, 2*s);
-    } else {
-      ctx.beginPath(); ctx.arc(p.x-4*s, p.y-46*s + bob, 2*s, 0, Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc(p.x+6*s, p.y-46*s + bob, 2*s, 0, Math.PI*2); ctx.fill();
-    }
-    ctx.beginPath();
-    if(state.kickT>0) ctx.arc(p.x+1*s, p.y-38*s + bob, 4*s, Math.PI, 0);
-    else ctx.arc(p.x+1*s, p.y-38*s + bob, 4*s, 0, Math.PI);
-    ctx.stroke();
-  }
-
-  function pinBubble(){
-    if(!bubbleEl || bubbleEl.classList.contains("hidden")) return;
-    const p = floorToScreen(jesper.u, jesper.v);
-    const cx = view.ox + p.x*view.s;
-    const cy = view.oy + p.y*view.s;
-    bubbleEl.style.maxWidth="92%";
-    bubbleEl.style.left = `${Math.max(10, Math.min(view.cssW-260, cx-140))}px`;
-    const wantedBottom = (view.cssH - cy) + 140;
-    bubbleEl.style.bottom = `${clamp(wantedBottom, 110, view.cssH-80)}px`;
-  }
-
-  // ===== Update =====
-  function update(dt){
-    if(wonder && !wonder.classList.contains("hidden")) return;
-
-    const now = performance.now();
-    if(now > state.nextTalk){
-      const lines=[
-        "Det här känns som ett möte utan agenda.",
-        "Jag gick hit för kaffe. Jag fann… vägg.",
-        "Tre pynt. Noll mening. Perfekt.",
-        "Jag vill ha en ticket: Fönster i rummet.",
-        "Jag är en gubbe i ett rum. Det är allt."
-      ];
-      if(Math.random()<0.50) bubble(lines[(Math.random()*lines.length)|0], 1700);
-      state.nextTalk = now + 2300 + Math.random()*2400;
-    }
-
-    state.kickT = Math.max(0, state.kickT - dt);
-
-    let du=0, dv=0;
-    if(!state.sitting && state.joy.active){
-      const v=dragToRoomVec(state.joy.dx, state.joy.dy);
-      const L=Math.hypot(v.du,v.dv)||1;
-      du=(v.du/L)*jesper.speed;
-      dv=(v.dv/L)*jesper.speed;
-    } else if(!state.sitting){
-      du = jesper.du * Math.pow(0.02, dt);
-      dv = jesper.dv * Math.pow(0.02, dt);
-    }
-    jesper.du = du; jesper.dv = dv;
-
-    collideAndSlide(jesper, jesper.r, jesper.u + du*dt, jesper.v + dv*dt);
-
-    // ornaments
-    const fr=Math.pow(0.02, dt);
-    for(const o of ornaments){
-      if(state.dragging===o) continue;
-      o.du *= fr; o.dv *= fr;
-      collideAndSlide(o, o.r, o.u + o.du*dt, o.v + o.dv*dt);
-    }
-
-    // ornament separation
-    for(let i=0;i<ornaments.length;i++){
-      for(let j=i+1;j<ornaments.length;j++){
-        const a=ornaments[i], b=ornaments[j];
-        const dx=b.u-a.u, dy=b.v-a.v;
-        const d=Math.hypot(dx,dy);
-        const minD=a.r+b.r+0.02;
-        if(d>0 && d<minD){
-          const push=(minD-d)/2;
-          const nx=dx/d, ny=dy/d;
-          a.u -= nx*push; a.v -= ny*push;
-          b.u += nx*push; b.v += ny*push;
-          const tDu=a.du, tDv=a.dv;
-          a.du=b.du; a.dv=b.dv;
-          b.du=tDu; b.dv=tDv;
-        }
-      }
-    }
-
-    for(const p of state.puffs){
-      p.u += p.du*dt; p.v += p.dv*dt;
-      p.a -= 1.6*dt;
-    }
-    state.puffs = state.puffs.filter(p=>p.a>0);
-
-    pinBubble();
-  }
-
-  // ===== Draw =====
-  function draw(tMs){
-    drawRoom();
-
     ctx.save();
     ctx.translate(view.ox, view.oy);
     ctx.scale(view.s, view.s);
 
-    for(const p of state.puffs){
-      const pp=floorToScreen(p.u,p.v);
-      ctx.save();
-      ctx.globalAlpha=Math.max(0,p.a)*0.22;
-      ctx.fillStyle="#111827";
-      ctx.beginPath(); ctx.arc(pp.x, pp.y-6, 12, 0, Math.PI*2); ctx.fill();
-      ctx.restore();
-    }
+    const x=props.table.x, w=props.table.w;
+    const topY = FLOOR_Y - 110;
 
-    const drawables=[
-      {v:props.table.v, kind:"table"},
-      {v:props.chair.v, kind:"chair"},
-      {v:props.tree.v,  kind:"tree"},
-      ...ornaments.map(o=>({v:o.v, kind:"orn", o})),
-      {v:jesper.v, kind:"jesper"},
-    ];
-    drawables.sort((a,b)=>a.v-b.v);
+    shadowEllipse(x+w/2, FLOOR_Y+10, w*0.33, 10, 0.10);
 
-    for(const d of drawables){
-      if(d.kind==="table") drawTable();
-      else if(d.kind==="chair") drawChair();
-      else if(d.kind==="tree") drawTree(tMs);
-      else if(d.kind==="orn") drawOrnament(d.o);
-      else drawJesper(tMs);
-    }
+    // table top
+    rrFillStroke(x, topY, w, 46, 16, "#ffffff", "#111827", 4);
+    // inset
+    ctx.save();
+    ctx.globalAlpha=0.08;
+    rrFillStroke(x+10, topY+10, w-20, 26, 14, "#60a5fa", "rgba(0,0,0,0)", 0);
+    ctx.restore();
+
+    // apron
+    rrFillStroke(x+18, topY+42, w-36, 34, 14, "#e5e7eb", "#111827", 4);
+
+    // legs
+    rrFillStroke(x+26,     topY+70, 22, 78, 12, "#e5e7eb", "#111827", 4);
+    rrFillStroke(x+w-48,   topY+70, 22, 78, 12, "#e5e7eb", "#111827", 4);
+
+    // a tiny laptop + coffee cup (office core)
+    rrFillStroke(x+w*0.58, topY+14, 54, 22, 8, "#dbeafe", "#111827", 4);
+    rrFillStroke(x+w*0.72, topY+16, 18, 20, 8, "#ffffff", "#111827", 4);
+    circleFill(x+w*0.74, topY+28, 4, "#111827");
 
     ctx.restore();
-    drawFrame();
   }
 
-  // ===== Loop =====
-  let last=performance.now();
-  function loop(t){
-    const dt=Math.min(0.033, (t-last)/1000);
+  function drawChair(){
+    ctx.save();
+    ctx.translate(view.ox, view.oy);
+    ctx.scale(view.s, view.s);
+
+    const x=props.chair.x, w=props.chair.w;
+    const seatY = FLOOR_Y - 78;
+
+    shadowEllipse(x+w/2, FLOOR_Y+10, w*0.28, 9, 0.10);
+
+    // seat
+    rrFillStroke(x, seatY, w, 34, 16, "#ffffff", "#111827", 4);
+    rrFillStroke(x+12, seatY+30, w-24, 30, 14, "#e5e7eb", "#111827", 4);
+
+    // back
+    rrFillStroke(x+18, seatY-68, w-36, 72, 18, "#ffffff", "#111827", 4);
+    ctx.save();
+    ctx.globalAlpha=0.10;
+    rrFillStroke(x+24, seatY-62, w-48, 56, 16, "#60a5fa", "rgba(0,0,0,0)", 0);
+    ctx.restore();
+
+    // legs
+    rrFillStroke(x+16, seatY+56, 16, 58, 10, "#e5e7eb", "#111827", 4);
+    rrFillStroke(x+w-32, seatY+56, 16, 58, 10, "#e5e7eb", "#111827", 4);
+
+    // label (tiny, but clear)
+    ctx.fillStyle="rgba(17,24,39,0.30)";
+    ctx.font="1000 11px ui-monospace, monospace";
+    ctx.fillText("STOL", x+ w/2 - 16, seatY-26);
+
+    ctx.restore();
+  }
+
+  function drawTree(tMs){
+    ctx.save();
+    ctx.translate(view.ox, view.oy);
+    ctx.scale(view.s, view.s);
+
+    const x=props.tree.x, w=props.tree.w;
+    const cx = x + w/2;
+    shadowEllipse(cx, FLOOR_Y+10, w*0.22, 9, 0.10);
+
+    // trunk
+    rrFillStroke(cx-10, FLOOR_Y-44, 20, 42, 10, "#e5e7eb", "#111827", 4);
+
+    // body (layered triangles)
+    ctx.strokeStyle="#111827"; ctx.lineWidth=4;
+    ctx.fillStyle="#dcfce7";
+    ctx.beginPath();
+    ctx.moveTo(cx, FLOOR_Y-180);
+    ctx.lineTo(cx-56, FLOOR_Y-94);
+    ctx.lineTo(cx+56, FLOOR_Y-94);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(cx, FLOOR_Y-144);
+    ctx.lineTo(cx-72, FLOOR_Y-48);
+    ctx.lineTo(cx+72, FLOOR_Y-48);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+
+    // ornaments
+    ctx.font="26px system-ui";
+    ctx.fillText("⭐", cx-12, FLOOR_Y-196);
+    ctx.font="22px system-ui";
+    ctx.fillText("🔴", cx-70, FLOOR_Y-106);
+    ctx.fillText("🔴", cx+40, FLOOR_Y-112);
+    ctx.fillText("🔴", cx-10, FLOOR_Y-74);
+
+    // subtle glow pulse
+    const pulse = 0.65 + 0.35*Math.sin(tMs/260);
+    ctx.save();
+    ctx.globalAlpha=0.12*pulse;
+    ctx.fillStyle="#60a5fa";
+    ctx.beginPath();
+    ctx.ellipse(cx, FLOOR_Y-110, 88, 120, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  function drawOrnament(o){
+    ctx.save();
+    ctx.translate(view.ox, view.oy);
+    ctx.scale(view.s, view.s);
+
+    shadowEllipse(o.x, o.y+12, 16, 5, 0.10);
+    ctx.fillStyle=o.base;
+    ctx.strokeStyle="#111827";
+    ctx.lineWidth=4;
+    ctx.beginPath(); ctx.arc(o.x, o.y, o.r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+
+    ctx.font="24px system-ui";
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
+    ctx.fillStyle="#111827";
+    ctx.fillText(o.label, o.x, o.y+1);
+    ctx.textAlign="start";
+    ctx.textBaseline="alphabetic";
+
+    ctx.restore();
+  }
+
+  function drawJesper(tMs){
+    ctx.save();
+    ctx.translate(view.ox, view.oy);
+    ctx.scale(view.s, view.s);
+
+    const moving = Math.abs(jesper.vx) > 40 && !state.sitting && jesper.action!=="kick";
+    const phase = (tMs/140);
+    const frame = moving ? (Math.floor(phase) % 4) : 0;
+
+    let action="idle";
+    if(state.sitting) action="sit";
+    else if(jesper.action==="kick" && jesper.actionT < 0.26) action="kick";
+    else if(moving) action="walk";
+
+    // render sprite
+    drawJesperSprite(frame, action, jesper.facing);
+
+    // draw sprite scaled (pixel look)
+    const scale = 2.15;       // sprite size
+    const drawW = 64*scale;
+    const drawH = 64*scale;
+
+    const x = jesper.x - drawW/2;
+    const y = FLOOR_Y - drawH + 18; // align feet to floor
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(spr, x, y, drawW, drawH);
+    ctx.restore();
+
+    // name tag (small)
+    ctx.font="900 12px ui-monospace, monospace";
+    ctx.fillStyle="rgba(17,24,39,0.55)";
+    ctx.textAlign="center";
+    ctx.fillText("JESPER", jesper.x, y-6);
+    ctx.textAlign="start";
+
+    ctx.restore();
+  }
+
+  function drawJoystick(){
+    if(!state.joy.active) return;
+    // draw a simple horizontal slider cue (NOT d-pad)
+    ctx.save();
+    ctx.translate(view.ox, view.oy);
+    ctx.scale(view.s, view.s);
+
+    const bx = clamp((state.joy.sx - view.ox)/view.s, ROOM.x+70, ROOM.x+ROOM.w-70);
+    const by = ROOM.y + ROOM.h - 78;
+    const kx = clamp(bx + (state.joy.dx/view.s), bx-110, bx+110);
+
+    ctx.globalAlpha = 0.92;
+    ctx.strokeStyle="rgba(17,24,39,0.30)";
+    ctx.lineWidth=6;
+    ctx.lineCap="round";
+    ctx.beginPath(); ctx.moveTo(bx-80, by); ctx.lineTo(bx+80, by); ctx.stroke();
+
+    ctx.fillStyle="rgba(37,99,235,0.18)";
+    ctx.strokeStyle="rgba(17,24,39,0.55)";
+    ctx.lineWidth=4;
+    ctx.beginPath(); ctx.arc(kx, by, 18, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function pinBubble(){
+    if(!bubbleEl || bubbleEl.classList.contains("hidden")) return;
+    // anchor above Jesper
+    const cx = (view.ox + jesper.x*view.s);
+    const cy = (view.oy + FLOOR_Y*view.s);
+    bubbleEl.style.maxWidth="92%";
+    bubbleEl.style.left = `${Math.max(10, Math.min(view.cssW-260, cx-140))}px`;
+    bubbleEl.style.bottom = `${clamp((view.cssH - cy) + 165, 110, view.cssH-80)}px`;
+  }
+
+  // ===== Game loop =====
+  let last = performance.now();
+  function step(t){
+    const dt = Math.min(0.033, (t-last)/1000);
     last=t;
-    update(dt);
-    draw(t);
-    requestAnimationFrame(loop);
-  }
-  requestAnimationFrame(loop);
 
-  setTimeout(()=>toast("Tips: KNUFF ⏰ → 🍬 → ⭐ och SITT på stolen."), 900);
+    if(!(wonder && !wonder.classList.contains("hidden"))){
+      maybeTalk();
+
+      // update action timers
+      if(jesper.action!=="idle"){
+        jesper.actionT += dt;
+        if(jesper.action==="kick" && jesper.actionT>0.35){ jesper.action="idle"; }
+      }
+      state.kickT = Math.max(0, state.kickT - dt);
+
+      // joystick -> velocity
+      if(state.joy.active && !state.sitting){
+        const target = (state.joy.dx/150) * 360;
+        jesper.vx = lerp(jesper.vx, target, 0.28);
+      } else {
+        jesper.vx = lerp(jesper.vx, 0, 0.18);
+      }
+      if(Math.abs(jesper.vx) > 15) jesper.facing = jesper.vx>=0 ? 1 : -1;
+
+      // integrate
+      jesper.x = resolveWallsX(jesper.x + jesper.vx*dt, 28);
+
+      // ornaments
+      const fr = Math.pow(0.02, dt);
+      for(const o of ornaments){
+        if(state.dragging===o) continue;
+        o.vx *= fr;
+        o.x += o.vx*dt;
+        resolveOrnament(o);
+      }
+
+      // ornament separation
+      for(let i=0;i<ornaments.length;i++){
+        for(let j=i+1;j<ornaments.length;j++){
+          const a=ornaments[i], b=ornaments[j];
+          const dx=b.x-a.x;
+          const d=Math.abs(dx);
+          const minD=a.r+b.r+8;
+          if(d>0 && d<minD){
+            const push=(minD-d)/2;
+            const s = Math.sign(dx)||1;
+            a.x -= s*push; b.x += s*push;
+            const tv=a.vx; a.vx=b.vx; b.vx=tv;
+          }
+        }
+      }
+
+      pinBubble();
+    }
+
+    // draw
+    drawRoom();
+    drawFrame();
+    drawTable();
+    drawChair();
+    drawTree(t);
+
+    // ornaments behind Jesper? (simple: draw ornaments first)
+    for(const o of ornaments) drawOrnament(o);
+    drawJesper(t);
+
+    drawJoystick();
+
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+
+  // Initial hints
+  setTimeout(()=>toast("Dra i rummet = gå vänster/höger • Dra pynt = flytta • KNUFF nära pynt • SITT nära stolen"), 850);
+  setTimeout(()=>toast("Tips: KNUFF ⏰ → 🍬 → ⭐ och SITT på stolen."), 2600);
 
 })();
