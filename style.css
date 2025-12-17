@@ -150,18 +150,3 @@ canvas#game{ width:100%; height:100%; display:block; touch-action:none; }
   .btn--big{ padding: 13px 10px; }
   .hint{ font-size: 0.8rem; }
 }
-
-
-.extras {
-  padding-top: 8px;
-  display: flex;
-  justify-content: center;
-}
-.upload-label {
-  font-weight: 800;
-  font-size: 0.85rem;
-  color: var(--ink);
-}
-.upload-label input {
-  margin-left: 6px;
-}
