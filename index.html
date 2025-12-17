@@ -31,12 +31,6 @@
       <button id="kickBtn" class="btn btn--big">👞 KNUFF</button>
       <button id="sitBtn" class="btn btn--big btn--alt">🪑 SITT</button>
     </section>
-
-    <section class="extras" aria-label="Extra">
-      <label class="upload-label">
-        🖼️ Byt tavla: <input id="upload" type="file" accept="image/*" />
-      </label>
-    </section>
   </main>
 
   <div id="helpModal" class="modal hidden" role="dialog" aria-modal="true">
@@ -63,7 +57,7 @@
         <div id="wonderFallback" class="wonder__fallback hidden">
           <div class="sparkle">✨</div><div class="sparkle">✨</div><div class="sparkle">✨</div><div class="sparkle">✨</div>
           <div class="sparkle">✨</div><div class="sparkle">✨</div><div class="sparkle">✨</div><div class="sparkle">✨</div>
-          <div class="fallbackText">Välj en bild via <b>Byt tavla</b> (du kan också lägga en default i <b>/assets/julbild.jpg</b>)</div>
+          <div class="fallbackText">Lägg en bild i <b>/assets/julbild.jpg</b></div>
         </div>
       </div>
 
@@ -72,10 +66,5 @@
   </div>
 
   <script src="main.js"></script>
-  <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch(console.warn);
-    }
-  </script>
 </body>
 </html>
