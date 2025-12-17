@@ -152,14 +152,16 @@ canvas#game{ width:100%; height:100%; display:block; touch-action:none; }
 }
 
 
-/* ===== Patch v9: make the game view big (no huge empty area) ===== */
-#gameWrap, .gameWrap, .game-wrap { width: 100%; }
-#game{
-  width: 100%;
-  height: auto !important;
-  aspect-ratio: 4 / 3;
-  max-height: 68vh;
-  display: block;
-  background: #fff;
-  touch-action: none;
+.extras {
+  padding-top: 8px;
+  display: flex;
+  justify-content: center;
+}
+.upload-label {
+  font-weight: 800;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+.upload-label input {
+  margin-left: 6px;
 }
