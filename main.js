@@ -39,6 +39,7 @@
   const wonder = $("wonder");
   const closeWonderBtn = $("closeWonderBtn");
   const wonderImg = $("wonderImg");
+  const tavlaImg = $("tavlaImg");
   const wonderFallback = $("wonderFallback");
 
   function toast(msg, ms=1200){
@@ -466,7 +467,7 @@
     ctx.lineTo(ROOM.x + ROOM.w, FLOOR_Y);
     ctx.stroke();
 
-    // tiny “tavla” (bilden tas från <img id="wonderImg" ...> i index.html)
+    // tiny “tavla” placeholder
     drawFrame();
 
     // furniture
@@ -503,12 +504,12 @@
     ctx.stroke();
   }
 
+  
   function drawImageCover(img, x, y, w, h){
-    // Cover-fit (som CSS background-size: cover)
+    // cover-fit (like CSS background-size: cover)
     const iw = img.naturalWidth || img.width;
     const ih = img.naturalHeight || img.height;
     if (!iw || !ih) return false;
-
     const s = Math.max(w / iw, h / ih);
     const dw = iw * s;
     const dh = ih * s;
@@ -521,7 +522,7 @@
   function drawFrame(){
     const f = props.frame;
 
-    // ram
+    // frame
     ctx.save();
     ctx.fillStyle = "#ffffff";
     ctx.strokeStyle = "#111827";
@@ -529,34 +530,40 @@
     roundRectStroke(f.x, f.y, f.w, f.h, 10);
     ctx.fillRect(f.x+4, f.y+4, f.w-8, f.h-8);
 
-    // bild (läggs i HTML: <img id="wonderImg" src="...">)
-    const img = wonderImg;
-    const innerX = f.x + 6;
-    const innerY = f.y + 6;
-    const innerW = f.w - 12;
-    const innerH = f.h - 12;
+    // image from <img id="tavlaImg" src="assets/tavla.jpg">
+    const img = tavlaImg;
+    const innerX = f.x + 6, innerY = f.y + 6;
+    const innerW = f.w - 12, innerH = f.h - 12;
 
     let drew = false;
     if (img && img.complete && (img.naturalWidth || img.width)){
-      // klipp mot inner-ytan så bilden aldrig ritar utanför ramen
       ctx.save();
-      ctx.beginPath();
-      ctx.rect(innerX, innerY, innerW, innerH);
-      ctx.clip();
+      ctx.beginPath(); ctx.rect(innerX, innerY, innerW, innerH); ctx.clip();
       drew = drawImageCover(img, innerX, innerY, innerW, innerH);
       ctx.restore();
     }
+    ctx.restore();
 
     if (!drew){
-      // fallback-text om bilden saknas
-      ctx.fillStyle = "rgba(17,24,39,0.35)";
-      ctx.font = "900 12px ui-monospace, monospace";
-      ctx.fillText("TAVLA", f.x + 16, f.y + 24);
-      ctx.fillStyle = "rgba(17,24,39,0.25)";
-      ctx.font = "900 10px ui-monospace, monospace";
-      ctx.fillText("(lägg bild i HTML)", f.x + 10, f.y + 42);
+      drawFramePlaceholder();
     }
+  }
 
+function drawFramePlaceholder(){
+    const f = props.frame;
+    ctx.save();
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#111827";
+    ctx.lineWidth = 4;
+    roundRectStroke(f.x, f.y, f.w, f.h, 10);
+    ctx.fillRect(f.x+4, f.y+4, f.w-8, f.h-8);
+
+    ctx.fillStyle = "rgba(17,24,39,0.35)";
+    ctx.font = "900 12px ui-monospace, monospace";
+    ctx.fillText("TAVLA", f.x + 16, f.y + 24);
+    ctx.fillStyle = "rgba(17,24,39,0.25)";
+    ctx.font = "900 10px ui-monospace, monospace";
+    ctx.fillText("(lägg bild själv)", f.x + 10, f.y + 42);
     ctx.restore();
   }
 
